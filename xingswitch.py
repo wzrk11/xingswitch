@@ -76,7 +76,7 @@ DEFAULT_CONFIG = {
     "hidden": [],
     "usage": {},
     # 开源后请把这里改成真实仓库地址，界面上的 GitHub 链接会跟着变
-    "projectUrl": "https://github.com/xing/xingswitch",
+    "projectUrl": "https://github.com/wzrk11/xingswitch",
 }
 
 # ---------------------------------------------------------------- Win32 绑定
