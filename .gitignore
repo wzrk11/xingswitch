@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.spec
+
+# PyInstaller
+build/
+dist/
+
+# 运行时生成的东西
+config.json
+*.log
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store

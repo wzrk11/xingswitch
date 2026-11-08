@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0c0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="XingSwitch">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="manifest" href="/manifest.json">
+<title>XingSwitch</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#0a0c0f;--card:#151a21;--text:#e7eaee;--muted:#7f8b99;
+  --line:#252d38;--accent:#5fe3a4;--danger:#ff6b6b;
+}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font:400 16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  padding:calc(env(safe-area-inset-top) + 22px) 18px calc(env(safe-area-inset-bottom) + 18px);
+  display:flex;justify-content:center;
+}
+.wrap{width:100%;max-width:560px;display:flex;flex-direction:column;gap:20px;min-height:100%;min-width:0}
+.meta{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  font-size:12px;color:var(--muted);letter-spacing:.04em}
+.meta .res{font-variant-numeric:tabular-nums}
+.current{display:flex;align-items:center;gap:11px;font-size:34px;font-weight:500;
+  letter-spacing:-.02em;line-height:1.2;margin-top:4px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
+  box-shadow:0 0 0 4px rgba(95,227,164,.14);flex:0 0 auto}
+.dot.bad{background:var(--danger);box-shadow:0 0 0 4px rgba(255,107,107,.14)}
+.curRaw{font-size:12px;color:var(--muted);letter-spacing:.03em;min-height:18px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+@media(min-width:520px){.grid{grid-template-columns:repeat(3,1fr)}}
+.card{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--text);
+  border-radius:18px;min-height:112px;min-width:0;padding:15px;display:flex;flex-direction:column;
+  align-items:flex-start;justify-content:space-between;gap:10px;font:inherit;text-align:left;
+  cursor:pointer;transition:border-color .15s,background .15s,transform .08s}
+.card:active{transform:scale(.985)}
+.card .name{font-size:20px;font-weight:500;line-height:1.25;word-break:break-word}
+.card .raw{font-size:12px;color:var(--muted);letter-spacing:.03em}
+.card.active{border-color:rgba(95,227,164,.55);background:rgba(95,227,164,.09)}
+.card.active .name{color:var(--accent)}
+.card.active .raw{color:rgba(95,227,164,.7)}
+.card.busy{opacity:.5}
+.card.edit{cursor:default;justify-content:flex-start;gap:12px}
+.card.edit input{width:100%;background:#0e1319;border:1px solid var(--line);color:var(--text);
+  border-radius:11px;padding:9px 10px;font:inherit;font-size:16px;outline:none}
+.card.edit input:focus{border-color:rgba(95,227,164,.5)}
+.toggle{font:inherit;font-size:12px;color:var(--muted);background:none;border:1px solid var(--line);
+  border-radius:999px;padding:4px 11px;cursor:pointer}
+.toggle.on{color:var(--accent);border-color:rgba(95,227,164,.45)}
+footer{margin-top:auto;display:flex;align-items:center;gap:10px;padding-top:10px}
+.ghost{font:inherit;font-size:14px;background:none;border:1px solid var(--line);color:var(--muted);
+  border-radius:999px;padding:10px 16px;cursor:pointer}
+.ghost:disabled{opacity:.4}
+.primary{font:inherit;font-size:14px;font-weight:500;background:var(--accent);border:none;color:#06110c;
+  border-radius:999px;padding:10px 18px;cursor:pointer}
+.hint{margin-left:auto;font-size:12px;color:var(--muted);text-align:right;line-height:1.4;
+  font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere}
+.gh{flex:0 0 auto;font-size:12px;color:var(--muted);text-decoration:none;
+  border-bottom:1px dotted rgba(127,139,153,.5);padding-bottom:1px}
+.used{font-size:11px;color:var(--muted);letter-spacing:.02em}
+.err-box{border:1px solid rgba(255,107,107,.3);background:rgba(255,107,107,.07);color:#ffb3b3;
+  border-radius:16px;padding:16px;font-size:14px;line-height:1.65}
+.err-box .btn-retry{margin-top:12px;font:inherit;font-size:13px;background:none;color:#ffd0d0;
+  border:1px solid rgba(255,107,107,.45);border-radius:999px;padding:7px 16px;cursor:pointer}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 26px);
+  transform:translate(-50%,16px);background:#1d2530;border:1px solid var(--line);color:var(--text);
+  padding:11px 18px;border-radius:999px;font-size:14px;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;max-width:88vw;text-align:center}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.err{border-color:rgba(255,107,107,.45);color:#ffb3b3}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="meta"><span id="monName">显示器</span><span class="res" id="monRes"></span></div>
+    <div class="current"><span class="dot" id="dot"></span><span id="curLabel">读取中</span></div>
+    <div class="curRaw" id="curRaw"></div>
+  </header>
+  <main class="grid" id="grid"></main>
+  <footer id="foot"></footer>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+(function(){
+  var S = {d:null, editing:false, busy:null, drafts:{}, hidden:new Set()};
+  var grid = document.getElementById('grid');
+  var foot = document.getElementById('foot');
+  var toastEl = document.getElementById('toast');
+  var toastTimer = null;
+
+  function toast(msg, isErr){
+    toastEl.textContent = msg;
+    toastEl.className = 'toast show' + (isErr ? ' err' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.className = 'toast' + (isErr ? ' err' : ''); }, 2800);
+  }
+
+  function getState(){
+    return fetch('/api/state', {cache:'no-store'}).then(function(r){ return r.json(); })
+      .then(function(d){ S.d = d; render(); })
+      .catch(function(){
+        S.d = {ok:false, error:'连不上电脑。确认手机和电脑在同一个 WiFi，程序还在运行。'};
+        render();
+      });
+  }
+
+  function errBox(msg){
+    var box = document.createElement('div');
+    box.className = 'err-box';
+    var p = document.createElement('div');
+    p.textContent = msg;
+    box.appendChild(p);
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn-retry';
+    b.textContent = '重新检测';
+    b.onclick = function(){
+      b.disabled = true;
+      b.textContent = '检测中…';
+      fetch('/api/reset', {method:'POST'}).then(function(r){ return r.json(); })
+        .then(function(r){ if (r.state) S.d = r.state; render(); })
+        .catch(function(){ b.disabled = false; b.textContent = '重新检测';
+                           toast('检测失败：网络错误', true); });
+    };
+    box.appendChild(b);
+    return box;
+  }
+
+  function render(){
+    var d = S.d || {};
+    grid.innerHTML = '';
+    grid.style.gridTemplateColumns = '';
+
+    document.getElementById('monName').textContent = (d.monitor && d.monitor.desc) || '显示器';
+    document.getElementById('monRes').textContent = (d.monitor && d.monitor.resolution) || '';
+    var dot = document.getElementById('dot');
+
+    if (!d.ok){
+      dot.className = 'dot bad';
+      document.getElementById('curLabel').textContent = '不可用';
+      document.getElementById('curRaw').textContent = '';
+      grid.style.gridTemplateColumns = '1fr';
+      grid.appendChild(errBox(d.error || '读不到状态'));
+      renderFoot(false);
+      return;
+    }
+
+    dot.className = 'dot';
+    document.getElementById('curLabel').textContent = d.currentLabel;
+    document.getElementById('curRaw').textContent = d.currentRaw + '  ·  ' + d.monitor.device;
+
+    var list = S.editing ? d.inputs : d.inputs.filter(function(i){ return !i.hidden; });
+    if (!list.length){
+      var box2 = document.createElement('div');
+      box2.className = 'err-box';
+      box2.textContent = '所有输入源都被隐藏了，点下面「编辑备注」把它们放出来。';
+      grid.style.gridTemplateColumns = '1fr';
+      grid.appendChild(box2);
+    }
+    list.forEach(function(inp){ grid.appendChild(S.editing ? editCard(inp) : normalCard(inp)); });
+    renderFoot(true);
+  }
+
+  function normalCard(inp){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'card' + (inp.active ? ' active' : '') + (S.busy === inp.value ? ' busy' : '');
+    var n = document.createElement('span');
+    n.className = 'name';
+    n.textContent = inp.label;
+    var r = document.createElement('span');
+    r.className = 'raw';
+    r.textContent = inp.active ? '当前 · ' + inp.raw : inp.raw;
+    b.appendChild(n);
+    b.appendChild(r);
+    b.onclick = function(){ go(inp.value); };
+    return b;
+  }
+
+  function usedText(ts){
+    if (!ts) return '从未用过';
+    var d = Math.floor((Date.now() / 1000 - ts) / 86400);
+    if (d <= 0) return '今天用过';
+    if (d === 1) return '昨天用过';
+    return d + ' 天前用过';
+  }
+
+  function editCard(inp){
+    var box = document.createElement('div');
+    box.className = 'card edit';
+    var field = document.createElement('input');
+    field.type = 'text';
+    field.maxLength = 16;
+    field.placeholder = inp.raw;
+    field.value = (S.drafts[inp.value] !== undefined) ? S.drafts[inp.value] : inp.label;
+    field.oninput = function(){ S.drafts[inp.value] = field.value; };
+    var hb = document.createElement('button');
+    hb.type = 'button';
+    function paint(){
+      var hid = S.hidden.has(inp.value);
+      hb.className = 'toggle' + (hid ? '' : ' on');
+      hb.textContent = hid ? '已隐藏' : '显示中';
+    }
+    hb.onclick = function(){
+      if (S.hidden.has(inp.value)) S.hidden.delete(inp.value); else S.hidden.add(inp.value);
+      paint();
+    };
+    paint();
+
+    var bottom = document.createElement('div');
+    bottom.style.cssText = 'display:flex;align-items:center;justify-content:space-between;' +
+                           'gap:8px;width:100%';
+    var info = document.createElement('span');
+    info.className = 'used';
+    info.textContent = inp.raw + ' · ' + usedText(inp.usedAt);
+    bottom.appendChild(info);
+    bottom.appendChild(hb);
+
+    box.appendChild(field);
+    box.appendChild(bottom);
+    return box;
+  }
+
+  function renderFoot(enabled){
+    foot.innerHTML = '';
+    if (!S.editing){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ghost';
+      b.textContent = '编辑备注';
+      b.disabled = !enabled;
+      b.onclick = startEdit;
+      foot.appendChild(b);
+      if (S.d && S.d.lanUrl){
+        var h = document.createElement('div');
+        h.className = 'hint';
+        h.textContent = S.d.lanUrl.replace('http://', '').replace(/\/$/, '');
+        foot.appendChild(h);
+      }
+      var gh = document.createElement('a');
+      gh.className = 'gh';
+      gh.textContent = 'GitHub';
+      gh.href = (S.d && S.d.projectUrl) || 'https://github.com';
+      gh.target = '_blank';
+      gh.rel = 'noopener';
+      foot.appendChild(gh);
+    } else {
+      var save = document.createElement('button');
+      save.type = 'button';
+      save.className = 'primary';
+      save.textContent = '保存';
+      save.onclick = saveEdit;
+      var cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'ghost';
+      cancel.textContent = '取消';
+      cancel.onclick = function(){ S.editing = false; S.drafts = {}; render(); };
+      foot.appendChild(save);
+      foot.appendChild(cancel);
+      var tip = document.createElement('div');
+      tip.className = 'hint';
+      tip.textContent = '隐藏 = 这个口不用';
+      foot.appendChild(tip);
+    }
+  }
+
+  function startEdit(){
+    S.editing = true;
+    S.drafts = {};
+    S.hidden = new Set((S.d.inputs || []).filter(function(i){ return i.hidden; })
+      .map(function(i){ return i.value; }));
+    render();
+  }
+
+  function saveEdit(){
+    var labels = {};
+    Object.keys(S.drafts).forEach(function(k){
+      var v = (S.drafts[k] || '').trim();
+      if (v) labels[k] = v;
+    });
+    fetch('/api/config', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({labels: labels, hidden: Array.from(S.hidden)})
+    }).then(function(r){ return r.json(); }).then(function(r){
+      if (!r.ok){ toast(r.error || '保存失败', true); return; }
+      S.editing = false;
+      S.drafts = {};
+      toast('已保存');
+      return getState();
+    }).catch(function(){ toast('保存失败：网络错误', true); });
+  }
+
+  function go(value){
+    if (S.busy !== null) return;
+    S.busy = value;
+    render();
+    fetch('/api/switch', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({value: value})
+    }).then(function(r){ return r.json(); }).then(function(r){
+      S.busy = null;
+      toast(r.ok ? (r.message || '已切换') : (r.error || '切换失败'), !r.ok);
+      return getState();
+    }).catch(function(){
+      S.busy = null;
+      toast('网络错误，切换命令没发出去', true);
+      render();
+    });
+  }
+
+  var q = new URLSearchParams(location.search);
+  if (q.get('msg')){
+    toast(q.get('msg'), q.get('err') === '1');
+    history.replaceState(null, '', '/');
+  }
+
+  getState();
+  setInterval(function(){
+    if (document.visibilityState !== 'visible') return;
+    if (S.editing || S.busy !== null) return;
+    getState();
+  }, 15000);
+})();
+</script>
+</body>
+</html>
