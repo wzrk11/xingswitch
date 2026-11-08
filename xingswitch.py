@@ -20,14 +20,16 @@ import sys
 import threading
 import time
 import tkinter as tk
+import winreg
 import zlib
 from contextlib import contextmanager
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
+import urllib.request
 
 APP_NAME = "XingSwitch"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.2"
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -468,6 +470,50 @@ def project_url():
     with _CFG_LOCK:
         return CONFIG.get("projectUrl") or DEFAULT_CONFIG["projectUrl"]
 
+
+# ---------------------------------------------------------------- 开机自启
+# 不依赖安装器：装没装、从源码跑还是 exe 跑，都能自己写这一项。
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_VALUE = "XingSwitch"
+
+
+def _launch_cmd():
+    """开机时要执行的命令行。带 --tray，开机时不弹窗口。"""
+    if getattr(sys, "frozen", False):
+        return '"%s" --tray' % os.path.abspath(sys.executable)
+    exe = os.path.abspath(sys.executable)
+    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    if os.path.exists(pyw):
+        exe = pyw
+    return '"%s" "%s" --tray' % (exe, os.path.abspath(__file__))
+
+
+def autostart_get():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.QueryValueEx(k, AUTOSTART_VALUE)
+        return True
+    except OSError:
+        return False
+
+
+def autostart_set(enable):
+    try:
+        if enable:
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+                winreg.SetValueEx(k, AUTOSTART_VALUE, 0, winreg.REG_SZ, _launch_cmd())
+            log.info("已设置开机自启：%s", _launch_cmd())
+        else:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                                winreg.KEY_SET_VALUE) as k:
+                winreg.DeleteValue(k, AUTOSTART_VALUE)
+            log.info("已取消开机自启")
+        return True
+    except OSError as e:
+        log.warning("设置开机自启失败：%s", e)
+        return False
+
 # ---------------------------------------------------------------- 业务逻辑
 
 def _probe_state(tries=3, delay=0.4):
@@ -840,7 +886,7 @@ class TrayIcon:
     TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_NONOTIFY = 0x0100, 0x0002, 0x0080
     MF_STRING, MF_SEPARATOR = 0x0000, 0x0800
     MF_CHECKED, MF_GRAYED = 0x0008, 0x0001
-    ID_OPEN, ID_ADDR, ID_QUIT = 1, 2, 3
+    ID_OPEN, ID_ADDR, ID_QUIT, ID_AUTO = 1, 2, 3, 4
     CLASS_NAME = "XingSwitchTrayWnd"
 
     def __init__(self, title):
@@ -981,6 +1027,9 @@ class TrayIcon:
             _user32.AppendMenuW(hmenu, self.MF_STRING | self.MF_GRAYED, 1099, "（读不到输入源）")
 
         _user32.AppendMenuW(hmenu, self.MF_SEPARATOR, 0, None)
+        _user32.AppendMenuW(
+            hmenu, self.MF_STRING | (self.MF_CHECKED if autostart_get() else 0),
+            self.ID_AUTO, "开机自动启动")
         _user32.AppendMenuW(hmenu, self.MF_STRING, self.ID_OPEN, "打开控制窗口")
         _user32.AppendMenuW(hmenu, self.MF_STRING, self.ID_ADDR, "复制手机地址")
         _user32.AppendMenuW(hmenu, self.MF_SEPARATOR, 0, None)
@@ -1003,6 +1052,8 @@ class TrayIcon:
             show_window()
         elif cmd == self.ID_ADDR:
             copy_lan_url()
+        elif cmd == self.ID_AUTO:
+            autostart_set(not autostart_get())
         elif cmd == self.ID_QUIT:
             stop_app()
 
@@ -1062,6 +1113,13 @@ def open_url(url):
         log.exception("打开链接失败")
 
 # ---------------------------------------------------------------- HTTP 服务
+
+class Server(ThreadingHTTPServer):
+    """Windows 上 SO_REUSEADDR 允许两个进程绑同一个端口，
+    默认值会让重复启动的实例悄悄抢占同一个口，必须关掉。"""
+    allow_reuse_address = False
+    daemon_threads = True
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = APP_NAME + "/" + APP_VERSION
@@ -1197,6 +1255,11 @@ class Handler(BaseHTTPRequestHandler):
                 _STATE_CACHE["data"] = None
                 return self._json({"ok": True, "state": build_state(force=True)})
 
+            if path == "/api/show" and self.client_address[0] in ("127.0.0.1", "::1"):
+                log.info("收到显示窗口请求（另一个实例在启动）")
+                show_window()
+                return self._json({"ok": True})
+
             if path == "/api/quit" and self.client_address[0] in ("127.0.0.1", "::1"):
                 self._json({"ok": True})
                 threading.Thread(target=stop_app, daemon=True).start()
@@ -1284,7 +1347,38 @@ def single_instance():
     kernel32.CreateMutexW.restype = wintypes.HANDLE
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
     kernel32.CreateMutexW(None, False, "Global\\XingSwitch_SingleInstance")
-    return ctypes.get_last_error() != 183
+    err = ctypes.get_last_error()
+    # 183 = 已存在；5 = 名字存在但打不开
+    # （对方以管理员身份运行时，普通权限进程会拿到 5 而不是 183，
+    #   当成"我是第一个"就会重复启动，这里必须一起判）
+    if err in (183, 5):
+        return False
+    return True
+
+
+def _probe_running(port, timeout=1.2):
+    """问一下 127.0.0.1:port 有没有别的实例在应答。
+    跨权限级别也能用 —— 管理员启动的实例，普通进程打不开它的互斥体，但能连它的端口。"""
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open("http://127.0.0.1:%d/api/state" % port, timeout=timeout) as r:
+            body = r.read(4000).decode("utf-8", "ignore")
+        return '"version"' in body
+    except Exception:
+        return False
+
+
+def _ask_running_to_show(port):
+    """已有实例在跑时，让它把窗口弹出来，而不是傻傻退出。"""
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        req = urllib.request.Request("http://127.0.0.1:%d/api/show" % port,
+                                     data=b"", method="POST")
+        opener.open(req, timeout=2).read()
+        return True
+    except Exception as e:
+        log.debug("唤起已有实例失败：%s", e)
+        return False
 
 
 def _refresh_ip():
@@ -1483,6 +1577,16 @@ class DesktopUI:
             tk.Label(row, text=_used_text(it.get("usedAt")), bg=BG, fg=MUTED,
                      font=(FONT, 8)).pack(side="left", padx=8)
 
+        tk.Frame(self.body, bg=LINE, height=1).pack(fill="x", pady=(14, 10))
+
+        auto = tk.BooleanVar(value=autostart_get())
+        tk.Checkbutton(self.body, text="开机自动启动", variable=auto, bg=BG, fg=TEXT,
+                       selectcolor=CARD, activebackground=BG, activeforeground=TEXT,
+                       font=(FONT, 10), bd=0, highlightthickness=0, cursor="hand2",
+                       command=lambda: self._toggle_autostart(auto)).pack(anchor="w")
+        tk.Label(self.body, text="开机后在托盘后台运行，不弹窗口。", bg=BG, fg=MUTED,
+                 font=(FONT, 8)).pack(anchor="w", padx=(22, 0))
+
         btns = tk.Frame(self.body, bg=BG)
         btns.pack(fill="x", pady=14)
         tk.Button(btns, text="保存", command=self.save_manager, font=(FONT, 10, "bold"),
@@ -1501,6 +1605,14 @@ class DesktopUI:
             self.hidden_set.discard(value)
         else:
             self.hidden_set.add(value)
+
+    def _toggle_autostart(self, var):
+        want = var.get()
+        if autostart_set(want):
+            self.set_status("开机自启已" + ("开启" if want else "关闭"))
+        else:
+            var.set(not want)
+            self.set_status("设置失败，可能被安全软件拦了")
 
     def save_manager(self):
         labels = {}
@@ -1635,14 +1747,20 @@ def main():
         except Exception:
             log.exception("生成 icon.ico 失败")
 
-    if not single_instance():
-        log.warning("已经有一个实例在跑了，本次退出")
-        if console:
-            print("已经有一个实例在跑了。")
+    first = single_instance() and not _probe_running(cfg["port"])
+    if not first:
+        if _ask_running_to_show(cfg["port"]):
+            log.info("已有实例在运行，已唤起它的窗口")
+            if console:
+                print("程序已在运行，已把它的窗口叫出来。")
+        else:
+            log.warning("已经有一个实例在跑了，本次退出")
+            if console:
+                print("已经有一个实例在跑了。")
         return
 
     try:
-        httpd = ThreadingHTTPServer(("0.0.0.0", cfg["port"]), Handler)
+        httpd = Server(("0.0.0.0", cfg["port"]), Handler)
         httpd.daemon_threads = True
     except OSError as e:
         log.error("端口 %d 绑定失败：%s", cfg["port"], e)
@@ -1664,8 +1782,10 @@ def main():
     root = tk.Tk()
     UI = DesktopUI(root)
 
-    if "--open" in sys.argv:
-        root.after(400, lambda: UI.show())
+    # 手动启动 → 直接弹窗口；开机自启（带 --tray）→ 只在托盘待着不打扰
+    start_hidden = any(a in sys.argv for a in ("--tray", "--startup", "--silent"))
+    if not start_hidden or "--open" in sys.argv:
+        root.after(350, lambda: UI.show())
 
     if cfg.get("tray", True):
         TRAY = TrayIcon("%s · %s" % (APP_NAME, LAN_URL))

@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 0, 0),
-    prodvers=(1, 1, 0, 0),
+    filevers=(1, 1, 2, 0),
+    prodvers=(1, 1, 2, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -14,11 +14,11 @@ VSVersionInfo(
       StringTable('080404b0', [
         StringStruct('CompanyName', 'XingSwitch'),
         StringStruct('FileDescription', '显示器输入源切换（托盘 + 手机遥控）'),
-        StringStruct('FileVersion', '1.1.0'),
+        StringStruct('FileVersion', '1.1.2'),
         StringStruct('InternalName', 'XingSwitch'),
         StringStruct('OriginalFilename', 'XingSwitch.exe'),
         StringStruct('ProductName', 'XingSwitch'),
-        StringStruct('ProductVersion', '1.1.0')
+        StringStruct('ProductVersion', '1.1.2')
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

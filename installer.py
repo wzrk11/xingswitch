@@ -27,7 +27,7 @@ import winreg
 
 APP_NAME = "XingSwitch"
 APP_TITLE = "XingSwitch 显示器输入源切换"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.2"
 APP_EXE = "XingSwitch.exe"
 APP_ID = "XingSwitch"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -128,7 +128,36 @@ def port_of(target):
 
 # ---------------------------------------------------------------- 安装 / 卸载
 
-def do_install(target, desktop, autostart, firewall, log):
+def detect_installed():
+    """读卸载登记，判断以前装过没有。返回 (安装目录, 版本号)。"""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINST_KEY) as k:
+            loc = winreg.QueryValueEx(k, "InstallLocation")[0]
+            try:
+                ver = winreg.QueryValueEx(k, "DisplayVersion")[0]
+            except OSError:
+                ver = ""
+    except OSError:
+        return None, ""
+    if not loc or not os.path.isdir(loc):
+        return None, ""
+    return loc, ver
+
+
+def _copy_if_changed(src, dst):
+    """内容一样就不动它，避免白白改写文件时间戳。"""
+    try:
+        if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
+            with open(src, "rb") as a, open(dst, "rb") as b:
+                if a.read() == b.read():
+                    return False
+    except Exception:
+        pass
+    shutil.copy2(src, dst)
+    return True
+
+
+def do_install(target, desktop, autostart, firewall, log, prev_dir=None):
     log("检查运行环境…")
     if not is_admin():
         log("  注意：当前没有管理员权限，防火墙规则会跳过")
@@ -141,18 +170,37 @@ def do_install(target, desktop, autostart, firewall, log):
     kill_running()
     time.sleep(0.4)
 
+    # 换了安装目录时，把旧的配置带过来
+    cfg_dst = os.path.join(target, "config.json")
+    if prev_dir and os.path.abspath(prev_dir) != os.path.abspath(target):
+        cfg_src = os.path.join(prev_dir, "config.json")
+        if os.path.exists(cfg_src) and not os.path.exists(cfg_dst):
+            try:
+                os.makedirs(target, exist_ok=True)
+                shutil.copy2(cfg_src, cfg_dst)
+                log("  已从旧目录迁移 config.json")
+            except Exception as e:
+                log("  配置迁移失败：%s" % e)
+
     log("复制文件到 %s" % target)
     os.makedirs(target, exist_ok=True)
     exe_dst = os.path.join(target, APP_EXE)
-    shutil.copy2(exe_src, exe_dst)
+    if _copy_if_changed(exe_src, exe_dst):
+        log("  %s 已更新" % APP_EXE)
+    else:
+        log("  %s 无变化，跳过" % APP_EXE)
 
     for extra in ("ui.html", "icon.ico"):
         src = payload(extra)
         if src:
             try:
-                shutil.copy2(src, os.path.join(target, extra))
+                if _copy_if_changed(src, os.path.join(target, extra)):
+                    log("  %s 已更新" % extra)
             except Exception:
                 pass
+
+    if os.path.exists(cfg_dst):
+        log("  保留原有 config.json（备注、使用记录不丢）")
 
     log("创建开始菜单快捷方式…")
     start_dir = os.path.join(START_MENU, APP_ID)
@@ -177,7 +225,7 @@ def do_install(target, desktop, autostart, firewall, log):
     make_shortcut(os.path.join(start_dir, "XingSwitch.lnk"), exe_dst, target, icon,
                   "显示器输入源切换")
     make_shortcut(os.path.join(start_dir, "卸载 XingSwitch.lnk"), uninst, target, icon,
-                  "卸载 XingSwitch")
+                  "卸载 XingSwitch", args="--uninstall")
     if desktop:
         log("创建桌面快捷方式…")
         make_shortcut(os.path.join(DESKTOP, "XingSwitch.lnk"), exe_dst, target, icon,
@@ -206,7 +254,8 @@ def do_install(target, desktop, autostart, firewall, log):
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
                                 winreg.KEY_SET_VALUE) as k:
-                winreg.SetValueEx(k, APP_ID, 0, winreg.REG_SZ, '"%s"' % exe_dst)
+                # 带 --tray，开机时不弹窗口
+                winreg.SetValueEx(k, APP_ID, 0, winreg.REG_SZ, '"%s" --tray' % exe_dst)
         except Exception as e:
             log("  设置失败：%s" % e)
 
@@ -225,8 +274,14 @@ def do_install(target, desktop, autostart, firewall, log):
 
     log("启动程序…")
     try:
-        subprocess.Popen([exe_dst], cwd=target,
-                         creationflags=0x00000008 | 0x00000200)
+        if is_admin():
+            # 安装器是管理员权限，直接 Popen 出来的程序也会是管理员权限；
+            # 那样用户再从桌面图标启动（普通权限）就会撞不开互斥体、起成第二个实例。
+            # 交给 explorer 拉起，拿回普通权限。
+            subprocess.Popen('explorer.exe "%s"' % exe_dst, cwd=target)
+        else:
+            subprocess.Popen([exe_dst], cwd=target,
+                             creationflags=0x00000008 | 0x00000200)
     except Exception as e:
         log("  启动失败：%s" % e)
 
@@ -332,7 +387,9 @@ class App:
         except Exception:
             pass
 
-        self.target = tk.StringVar(value=DEFAULT_DIR)
+        # 以前装过就直接指向原目录，实现原地升级
+        self.prev_dir, self.prev_ver = detect_installed()
+        self.target = tk.StringVar(value=self.prev_dir or DEFAULT_DIR)
         self.desktop = tk.BooleanVar(value=True)
         self.autostart = tk.BooleanVar(value=True)
         self.firewall = tk.BooleanVar(value=True)
@@ -368,6 +425,15 @@ class App:
                       relief="solid", bd=1, bg="#f3f4f6", cursor="hand2",
                       width=6).pack(side="left", padx=(8, 0))
 
+            if self.prev_dir:
+                same = (self.prev_ver == APP_VERSION)
+                tk.Label(body, text="检测到已安装的 %s%s，将原地%s，配置和备注全部保留。"
+                         % (APP_NAME, (" v" + self.prev_ver) if self.prev_ver else "",
+                            "覆盖" if same else "升级"),
+                         bg=BG, fg="#0f9d58", font=("Microsoft YaHei UI", 9),
+                         wraplength=460, justify="left", anchor="w").pack(
+                    fill="x", pady=(0, 10))
+
             for text, var in (
                 ("创建桌面快捷方式", self.desktop),
                 ("开机自动启动（推荐）", self.autostart),
@@ -402,7 +468,13 @@ class App:
                   relief="flat", bd=0, cursor="hand2", width=7).pack(side="right",
                                                                      padx=(0, 24), pady=14)
         danger = self.mode != "install"
-        self.btn = tk.Button(foot, text="开始安装" if not danger else "确认卸载",
+        if danger:
+            btn_text = "确认卸载"
+        elif self.prev_dir:
+            btn_text = "重新安装" if self.prev_ver == APP_VERSION else "开始升级"
+        else:
+            btn_text = "开始安装"
+        self.btn = tk.Button(foot, text=btn_text,
                              command=self.go, font=("Microsoft YaHei UI", 10, "bold"),
                              bg="#dc2626" if danger else ACCENT, fg="#ffffff",
                              activebackground="#b91c1c" if danger else "#0ea371",
@@ -461,10 +533,11 @@ class App:
         try:
             if self.mode == "install":
                 do_install(self.target.get().strip(), self.desktop.get(),
-                           self.autostart.get(), self.firewall.get(), self.write)
+                           self.autostart.get(), self.firewall.get(), self.write,
+                           prev_dir=self.prev_dir)
                 ip = lan_ip()
                 port = port_of(self.target.get().strip())
-                self.q.put(("done", "安装完成",
+                self.q.put(("done", "升级完成" if self.prev_dir else "安装完成",
                             "手机浏览器打开：http://%s:%d/\n（手机要和电脑连同一个 WiFi）" % (ip, port)))
             else:
                 do_uninstall(self.write)
@@ -491,10 +564,21 @@ class App:
         self.root.mainloop()
 
 
+def _is_uninstall_invocation(args):
+    """判断这次启动是卸载还是安装。
+    Uninstall.exe 是安装器的副本，直接双击时没有参数，
+    所以除了看 --uninstall，还要看自己的文件名。"""
+    if "--uninstall" in args:
+        return True
+    if FROZEN and os.path.basename(sys.executable).lower().startswith("uninstall"):
+        return True
+    return False
+
+
 def _main():
     args = [a.lower() for a in sys.argv[1:]]
     silent = "--silent" in args
-    uninstall = "--uninstall" in args
+    uninstall = _is_uninstall_invocation(args)
 
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -510,7 +594,8 @@ def _main():
             if uninstall:
                 do_uninstall(log)
             else:
-                do_install(DEFAULT_DIR, True, True, True, log)
+                prev, _ = detect_installed()
+                do_install(prev or DEFAULT_DIR, True, True, True, log, prev_dir=prev)
         except Exception as e:
             log("ERROR %s" % e)
             return 1
